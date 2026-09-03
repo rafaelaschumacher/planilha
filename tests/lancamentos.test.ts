@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   accountDelta,
-  buildCardPayment,
   buildInstallmentPurchase,
   buildTransaction,
   buildTransfer,

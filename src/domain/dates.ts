@@ -23,11 +23,15 @@ export interface CivilDate {
   d: number; // 1-31
 }
 
-export function isISODate(v: unknown): v is ISODate {
-  return typeof v === 'string' && DATE_RE.test(v) && parseISO(v as ISODate) !== null;
+// Retornam boolean simples, e não um type predicate: como `ISODate` é apenas
+// um apelido de `string`, um predicado faria o TypeScript estreitar o ramo
+// negativo para `never` e quebrar o código que continua tratando o valor
+// como texto.
+export function isISODate(v: unknown): boolean {
+  return typeof v === 'string' && DATE_RE.test(v) && parseISO(v) !== null;
 }
 
-export function isISOMonth(v: unknown): v is ISOMonth {
+export function isISOMonth(v: unknown): boolean {
   return typeof v === 'string' && MONTH_RE.test(v);
 }
 
