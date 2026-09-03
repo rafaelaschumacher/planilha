@@ -9,7 +9,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { formatMoney, parseMoney, splitInstallments } from '../../domain/money';
 import { formatDateBR, monthOf, today as todayOf } from '../../domain/dates';
-import { invoicePeriod, invoiceRefForDate } from '../../domain/invoice';
+import { invoicePeriod, invoiceRefForDate, invoiceRefForPaymentDate } from '../../domain/invoice';
 import { suggestCategory } from '../../domain/categorize';
 import {
   buildInstallmentPurchase,
@@ -215,7 +215,7 @@ export function TransactionForm({
         base.accountId = source?.kind === 'account' ? source.id : undefined;
         base.cardId = toAccountId || undefined;
         const card = cards.find((c) => c.id === toAccountId);
-        if (card) base.invoiceRef = invoiceRefForDate(card, date);
+        if (card) base.invoiceRef = invoiceRefForPaymentDate(card, date);
         base.paymentMethod = 'debit';
       } else if (kind === 'adjustment') {
         base.accountId = source?.kind === 'account' ? source.id : undefined;

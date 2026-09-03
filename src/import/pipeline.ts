@@ -19,7 +19,7 @@ import {
   type DuplicateMatch,
 } from '../domain/duplicates';
 import { buildTransaction, type TransactionDraft } from '../domain/transaction';
-import { invoiceRefForDate } from '../domain/invoice';
+import { invoiceRefForPaymentDate } from '../domain/invoice';
 import type {
   Card,
   CategoryRule,
@@ -43,6 +43,12 @@ export interface ImportContext {
   paymentAccountId?: ID;
   /** Cartão usado quando uma linha do extrato parecer pagamento de fatura. */
   paymentCardId?: ID;
+  /**
+   * O cartão em si, para descobrir em qual fatura o pagamento cai.
+   * Sem ele o pagamento fica sem referência — e a alocação por ordem de
+   * vencimento resolve, que é o comportamento correto de reserva.
+   */
+  paymentCard?: Card;
 }
 
 export interface PreviewRow {
@@ -200,8 +206,8 @@ export function buildImportPreview(parsed: ParseResult, context: ImportContext):
       warnings: rowWarnings,
     };
     if (suggestion.categoryId) row.categoryId = suggestion.categoryId;
-    if (kind === 'card_payment' && cardId && context.target.type === 'account') {
-      row.invoiceRef = invoiceRefForDate({ closingDay: 20, dueDay: 28 }, parsedRow.date);
+    if (kind === 'card_payment' && cardId && context.target.type === 'account' && context.paymentCard) {
+      row.invoiceRef = invoiceRefForPaymentDate(context.paymentCard, parsedRow.date);
     }
 
     rows.push(row);
@@ -292,8 +298,10 @@ export function materializePreview(
         draft.installmentNumber = row.parsed.installmentNumber;
         draft.installmentTotal = row.parsed.installmentTotal;
         // Cada fatura traz apenas a parcela do mês; o grupo une as que forem
-        // importadas ao longo do tempo pela descrição e pelo total.
-        draft.installmentGroupId = `imp_${normalize(row.description).replace(/\s+/g, '-')}_${row.parsed.installmentTotal}`;
+        // importadas ao longo do tempo. A chave inclui o VALOR da parcela para
+        // que duas compras diferentes na mesma loja, com o mesmo número de
+        // parcelas, não sejam fundidas numa só.
+        draft.installmentGroupId = `imp_${normalize(row.description).replace(/\s+/g, '-')}_${row.parsed.installmentTotal}_${row.amountCents}`;
       }
 
       if (row.kind === 'card_payment') {

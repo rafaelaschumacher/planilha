@@ -67,11 +67,17 @@ export function App() {
   const [moreOpen, setMoreOpen] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  // Tema: a preferência salva vence o sistema, nos dois sentidos.
+  // Tema: a preferência salva vence o sistema, nos dois sentidos. A cópia no
+  // localStorage é lida pelo script do index.html antes da primeira pintura.
   useEffect(() => {
     const root = document.documentElement;
     if (data.settings.theme === 'system') root.removeAttribute('data-theme');
     else root.setAttribute('data-theme', data.settings.theme);
+    try {
+      localStorage.setItem('financas:theme', data.settings.theme);
+    } catch {
+      /* armazenamento bloqueado: o tema ainda funciona, só pisca ao abrir */
+    }
   }, [data.settings.theme]);
 
   // Atalhos: N para novo lançamento, P para o modo privacidade.

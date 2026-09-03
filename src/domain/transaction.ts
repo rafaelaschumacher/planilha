@@ -13,7 +13,7 @@
  * `pnlEffect()`, que é a ÚNICA fonte de receita e despesa em todo o sistema.
  */
 
-import { assertCents, splitInstallments, type Cents } from './money';
+import { assertCents, formatMoney, splitInstallments, type Cents } from './money';
 import { addMonths, isISODate, type ISODate, type ISOMonth } from './dates';
 import { hash, normalizeMerchant } from './text';
 import type {
@@ -370,6 +370,13 @@ export interface InstallmentPurchaseInput {
 export function buildInstallmentPurchase(input: InstallmentPurchaseInput): Transaction[] {
   if (!Number.isInteger(input.installments) || input.installments < 1) {
     throw new Error(`número de parcelas inválido: ${input.installments}`);
+  }
+  // Não existe parcela de zero centavo. Sem esta guarda, R$ 0,01 em 2x geraria
+  // uma parcela vazia e o lançamento seria recusado com uma mensagem obscura.
+  if (Math.abs(input.totalCents) < input.installments) {
+    throw new Error(
+      `Não dá para dividir ${formatMoney(input.totalCents)} em ${input.installments} parcelas: cada parcela ficaria com menos de um centavo.`,
+    );
   }
   const groupId = input.groupId ?? newId('parc');
   const parts = splitInstallments(input.totalCents, input.installments);

@@ -62,7 +62,11 @@ export function ImportPage({
       existing: data.transactions,
       rules: data.rules,
     };
-    if (paymentCardId) base.paymentCardId = paymentCardId;
+    if (paymentCardId) {
+      base.paymentCardId = paymentCardId;
+      const card = cards.find((c) => c.id === paymentCardId);
+      if (card) base.paymentCard = card;
+    }
     return base;
   }, [target, data.transactions, data.rules, cards, paymentCardId]);
 

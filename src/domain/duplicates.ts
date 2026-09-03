@@ -141,9 +141,13 @@ export function scanForDuplicates(
     if (list.length < 2) continue;
     list.sort((x, y) => compareDate(x.date, y.date) || x.id.localeCompare(y.id));
     for (let i = 0; i < list.length; i++) {
+      const a = list[i]!;
       for (let j = i + 1; j < list.length; j++) {
-        const a = list[i]!;
         const b = list[j]!;
+        // A lista está ordenada por data e o cálculo zera acima de 4 dias:
+        // passando disso, nenhum par seguinte pode pontuar. Sem esta saída,
+        // uma base com muitos valores repetidos vira uma varredura quadrática.
+        if (Math.abs(diffDays(a.date, b.date)) > 4) break;
         // Parcelas do mesmo parcelamento nunca são duplicatas entre si.
         if (a.installmentGroupId && a.installmentGroupId === b.installmentGroupId) continue;
         const { score, reasons } = scoreDuplicate(a, b);

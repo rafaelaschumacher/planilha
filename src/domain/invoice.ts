@@ -105,6 +105,43 @@ export function invoiceRefForDate(card: Pick<Card, 'closingDay' | 'dueDay'>, dat
 }
 
 /**
+ * Em qual fatura cai um PAGAMENTO feito em `date`.
+ *
+ * Não é a mesma pergunta de `invoiceRefForDate`, que vale para COMPRAS.
+ * Uma compra entra pelo fechamento; um pagamento quita a fatura cujo
+ * VENCIMENTO ele está honrando.
+ *
+ * Exemplo do erro que isso evita: cartão que fecha dia 5 e vence dia 15.
+ * Um pagamento em 15/03 quita a fatura de MARÇO. Pela regra de compra, 15/03
+ * já pertenceria à fatura de abril, e o pagamento cairia na fatura errada —
+ * deixando março eternamente "em aberto".
+ *
+ * A regra pende para o passado de propósito: pagar com atraso é comum, pagar
+ * uma fatura que ainda nem fechou é raro. Escolhe a fatura mais recente que
+ * já venceu (ou vence nos próximos dias); só quando nenhuma venceu ainda é
+ * que olha para a frente.
+ */
+export function invoiceRefForPaymentDate(
+  card: Pick<Card, 'closingDay' | 'dueDay'>,
+  date: ISODate,
+): ISOMonth {
+  const month = monthOf(date);
+  const candidates = [-2, -1, 0, 1].map((delta) => addMonthsToMonth(month, delta));
+
+  const EARLY_GRACE_DAYS = 7;
+  const limit = addDays(date, EARLY_GRACE_DAYS);
+
+  let dueOrNearlyDue: ISOMonth | undefined;
+  for (const ref of candidates) {
+    if (compareDate(invoicePeriod(card, ref).dueDate, limit) <= 0) dueOrNearlyDue = ref;
+  }
+  if (dueOrNearlyDue) return dueOrNearlyDue;
+
+  // Nenhuma venceu ainda: fica com a próxima a vencer.
+  return candidates.find((ref) => compareDate(invoicePeriod(card, ref).dueDate, date) > 0) ?? month;
+}
+
+/**
  * Distribui os pagamentos entre as faturas do cartão.
  *
  * · Pagamento com `invoiceRef` vai para a fatura indicada.

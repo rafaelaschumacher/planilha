@@ -123,7 +123,8 @@ export function Future({ data }: { data: FinanceDataset }) {
             <Select
               value={listMonths}
               onChange={(e) => setListMonths(Number(e.target.value))}
-              className="h-8 w-auto text-[13px]"
+              className="h-8 text-[13px]"
+              style={{ width: 'auto' }}
               aria-label="Período da lista"
             >
               <option value={1}>Este mês</option>

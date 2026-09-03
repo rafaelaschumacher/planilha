@@ -248,7 +248,7 @@ export function Reports({ data }: { data: FinanceDataset }) {
               title="Evolução"
               description={`Receitas e despesas dos últimos ${range} meses`}
               action={
-                <Select value={range} onChange={(e) => setRange(Number(e.target.value))} className="h-8 w-auto text-[13px]">
+                <Select value={range} onChange={(e) => setRange(Number(e.target.value))} className="h-8 text-[13px]" style={{ width: 'auto' }}>
                   <option value={6}>6 meses</option>
                   <option value={12}>12 meses</option>
                   <option value={24}>24 meses</option>

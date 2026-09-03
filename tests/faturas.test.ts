@@ -6,6 +6,7 @@ import {
   currentInvoice,
   invoicePeriod,
   invoiceRefForDate,
+  invoiceRefForPaymentDate,
   listInvoices,
   openInvoices,
 } from '../src/domain/invoice';
@@ -180,5 +181,61 @@ describe('limite do cartão', () => {
     expect(fatura.ref).toBe('2024-03');
     expect(fatura.totalCents).toBe(0);
     expect(fatura.status).toBe('empty');
+  });
+});
+
+describe('pagamento quita a fatura certa', () => {
+  // Cartão que fecha dia 5 e vence dia 15 — o caso em que a regra de COMPRA
+  // daria a resposta errada para um PAGAMENTO.
+  const card = makeCard({ id: 'card', closingDay: 5, dueDay: 15 });
+
+  it('pagar no dia do vencimento quita a fatura daquele mês', () => {
+    expect(invoiceRefForPaymentDate(card, '2024-03-15')).toBe('2024-03');
+    // Pela regra de compra, 15/03 já pertenceria à fatura de abril.
+    expect(invoiceRefForDate(card, '2024-03-15')).toBe('2024-04');
+  });
+
+  it('pagar alguns dias antes ou depois ainda quita a mesma fatura', () => {
+    expect(invoiceRefForPaymentDate(card, '2024-03-12')).toBe('2024-03');
+    expect(invoiceRefForPaymentDate(card, '2024-03-18')).toBe('2024-03');
+  });
+
+  it('pende para a fatura vencida, não para a que ainda nem fechou', () => {
+    // Em 28/02 a fatura de fevereiro venceu há 13 dias e a de março vence em
+    // 16. Quem paga nesse dia está quitando a atrasada.
+    expect(invoiceRefForPaymentDate(card, '2024-02-28')).toBe('2024-02');
+    // Em 02/04 a de março está atrasada e a de abril nem fechou (fecha 05/04).
+    expect(invoiceRefForPaymentDate(card, '2024-04-02')).toBe('2024-03');
+    // Já em 20/04, a de abril venceu no dia 15: é essa.
+    expect(invoiceRefForPaymentDate(card, '2024-04-20')).toBe('2024-04');
+  });
+
+  it('aceita pagamento adiantado dentro de uma semana do vencimento', () => {
+    expect(invoiceRefForPaymentDate(card, '2024-04-10')).toBe('2024-04');
+  });
+
+  it('a fatura de fato fica quitada, sem ficar eternamente em aberto', () => {
+    const compra = buildTransaction({
+      kind: 'expense', date: '2024-02-10', description: 'Compra', amountCents: 50_000, cardId: 'card',
+    });
+    const pagamento = buildCardPayment({
+      date: '2024-03-15',
+      amountCents: 50_000,
+      accountId: 'acc',
+      cardId: 'card',
+      invoiceRef: invoiceRefForPaymentDate(card, '2024-03-15'),
+    });
+    // A compra de 10/02 fecha em 05/03 e vence em 15/03.
+    expect(invoiceRefForDate(card, '2024-02-10')).toBe('2024-03');
+    const fatura = buildInvoice(card, '2024-03', [compra, pagamento], '2024-03-20');
+    expect(fatura.totalCents).toBe(50_000);
+    expect(fatura.openCents).toBe(0);
+    expect(fatura.status).toBe('paid');
+  });
+
+  it('funciona também no cartão que fecha e vence no mesmo mês', () => {
+    const simples = makeCard({ id: 'c2', closingDay: 20, dueDay: 28 });
+    expect(invoiceRefForPaymentDate(simples, '2024-03-28')).toBe('2024-03');
+    expect(invoiceRefForPaymentDate(simples, '2024-04-01')).toBe('2024-03');
   });
 });

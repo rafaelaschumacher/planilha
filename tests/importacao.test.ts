@@ -266,3 +266,46 @@ describe('importação de fatura de cartão', () => {
     expect(resumo.cardPaymentCents).toBe(0);
   });
 });
+
+describe('correções encontradas na auditoria', () => {
+  it('o pagamento de fatura lido no extrato usa o ciclo REAL do cartão', () => {
+    // Cartão que fecha dia 5 e vence dia 15: um pagamento em 15/03 pertence à
+    // fatura de março. Com um ciclo fixo 20/28 a referência sairia errada.
+    const card = makeCard({ id: 'card', closingDay: 5, dueDay: 15 });
+    const extrato = parseCsvStatement('Data;Histórico;Valor\n15/03/2024;PAGAMENTO FATURA CARTAO;-1.200,00');
+    const contexto: ImportContext = {
+      target: { type: 'account', accountId: 'acc' },
+      existing: [],
+      rules,
+      paymentCardId: 'card',
+      paymentCard: card,
+    };
+    const preview = buildImportPreview(extrato, contexto);
+    expect(preview.rows[0]!.kind).toBe('card_payment');
+    expect(preview.rows[0]!.invoiceRef).toBe('2024-03');
+
+    const gravados = materializePreview(preview, contexto, 'lote');
+    expect(gravados[0]!.invoiceRef).toBe('2024-03');
+    // E continua sem virar despesa.
+    expect(monthSummary('2024-03', gravados, categoryMap).expenseCents).toBe(0);
+  });
+
+  it('duas compras parceladas diferentes na mesma loja não viram um grupo só', () => {
+    const card = makeCard({ id: 'card' });
+    const contexto: ImportContext = {
+      target: { type: 'card', cardId: 'card', card },
+      existing: [],
+      rules,
+    };
+    const fatura = parseCsvStatement(
+      [
+        'Data;Descrição;Valor',
+        '05/03/2024;LOJA MOVEIS 2/6;200,00',
+        '18/03/2024;LOJA MOVEIS 3/6;350,00',
+      ].join('\n'),
+    );
+    const gravados = materializePreview(buildImportPreview(fatura, contexto), contexto, 'lote');
+    const grupos = new Set(gravados.map((t) => t.installmentGroupId));
+    expect(grupos.size).toBe(2);
+  });
+});
