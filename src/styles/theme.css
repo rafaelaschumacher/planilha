@@ -1,0 +1,238 @@
+@import 'tailwindcss';
+
+/*
+ * Sistema visual.
+ *
+ * Cores dos gráficos: azul (entradas) e vermelho (saídas) — o par divergente
+ * quente/frio. Foi escolhido no lugar do clássico verde/vermelho porque esse
+ * par falha na separação para daltonismo (deuteranopia), o mais comum. Aqui,
+ * além da cor, todo valor sempre carrega sinal e rótulo em texto.
+ *
+ * O verde fica reservado para status ("dentro do orçamento"), sempre com
+ * rótulo junto.
+ */
+
+:root {
+  color-scheme: light;
+
+  --page: #f7f7f8;
+  --surface: #ffffff;
+  --surface-2: #f2f2f4;
+  --surface-hover: #f7f7f8;
+
+  --ink: #14161a;
+  --ink-2: #52555c;
+  --ink-3: #83878f;
+
+  --line: #e6e7ea;
+  --line-strong: #d3d5da;
+
+  --accent: #14161a;
+  --accent-ink: #ffffff;
+  --focus: #2a78d6;
+
+  /* Séries de dados — validadas para daltonismo e contraste. */
+  --series-in: #2a78d6;
+  --series-out: #e34948;
+  --series-in-soft: #dbe9fa;
+  --series-out-soft: #fadedd;
+
+  /* Rampa sequencial de um só tom, para magnitude. */
+  --seq-100: #cde2fb;
+  --seq-250: #86b6ef;
+  --seq-400: #3987e5;
+  --seq-550: #1c5cab;
+
+  /* Status — sempre acompanhados de ícone ou rótulo. */
+  --good: #0ca30c;
+  --good-ink: #006300;
+  --warning: #fab219;
+  --warning-ink: #8a5a00;
+  --critical: #d03b3b;
+  --critical-ink: #b02525;
+
+  --grid: #ececef;
+  --axis: #c9cbd1;
+
+  --radius: 14px;
+  --radius-sm: 10px;
+  --shadow: 0 1px 2px rgb(20 22 26 / 0.04), 0 1px 3px rgb(20 22 26 / 0.03);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+
+    --page: #0b0d11;
+    --surface: #141821;
+    --surface-2: #1b2029;
+    --surface-hover: #1b2029;
+
+    --ink: #eef0f3;
+    --ink-2: #a4a9b3;
+    --ink-3: #7b818c;
+
+    --line: #262c37;
+    --line-strong: #333a47;
+
+    --accent: #eef0f3;
+    --accent-ink: #0b0d11;
+    --focus: #6da7ec;
+
+    --series-in: #3987e5;
+    --series-out: #e66767;
+    --series-in-soft: #16304f;
+    --series-out-soft: #4a2323;
+
+    --seq-100: #0d366b;
+    --seq-250: #184f95;
+    --seq-400: #2a78d6;
+    --seq-550: #6da7ec;
+
+    --good: #0ca30c;
+    --good-ink: #3fd13f;
+    --warning: #fab219;
+    --warning-ink: #f3c04f;
+    --critical: #d03b3b;
+    --critical-ink: #f08585;
+
+    --grid: #222833;
+    --axis: #333a47;
+
+    --shadow: 0 1px 2px rgb(0 0 0 / 0.3);
+  }
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --page: #0b0d11;
+  --surface: #141821;
+  --surface-2: #1b2029;
+  --surface-hover: #1b2029;
+
+  --ink: #eef0f3;
+  --ink-2: #a4a9b3;
+  --ink-3: #7b818c;
+
+  --line: #262c37;
+  --line-strong: #333a47;
+
+  --accent: #eef0f3;
+  --accent-ink: #0b0d11;
+  --focus: #6da7ec;
+
+  --series-in: #3987e5;
+  --series-out: #e66767;
+  --series-in-soft: #16304f;
+  --series-out-soft: #4a2323;
+
+  --seq-100: #0d366b;
+  --seq-250: #184f95;
+  --seq-400: #2a78d6;
+  --seq-550: #6da7ec;
+
+  --good: #0ca30c;
+  --good-ink: #3fd13f;
+  --warning: #fab219;
+  --warning-ink: #f3c04f;
+  --critical: #d03b3b;
+  --critical-ink: #f08585;
+
+  --grid: #222833;
+  --axis: #333a47;
+
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.3);
+}
+
+@theme inline {
+  --color-page: var(--page);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-hover: var(--surface-hover);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-focus: var(--focus);
+  --color-in: var(--series-in);
+  --color-out: var(--series-out);
+  --color-in-soft: var(--series-in-soft);
+  --color-out-soft: var(--series-out-soft);
+  --color-good: var(--good);
+  --color-good-ink: var(--good-ink);
+  --color-warning: var(--warning);
+  --color-warning-ink: var(--warning-ink);
+  --color-critical: var(--critical);
+  --color-critical-ink: var(--critical-ink);
+  --color-grid: var(--grid);
+  --color-axis: var(--axis);
+  --radius-card: var(--radius);
+  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+
+* {
+  border-color: var(--line);
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--ink);
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Colunas de dinheiro precisam alinhar verticalmente. */
+.tnum {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum';
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--focus) 28%, transparent);
+}
+
+/* Barra de rolagem discreta, sem roubar a atenção dos números. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+input[type='date']::-webkit-calendar-picker-indicator {
+  opacity: 0.5;
+  cursor: pointer;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+.animate-in {
+  animation: fade-in 0.18s ease-out;
+}
