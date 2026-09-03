@@ -192,17 +192,21 @@ Já existe uma automação em `.github/workflows/deploy.yml`. Ela roda os testes
 cada envio e, **só se todos passarem**, publica o site — a partir da branch
 padrão do repositório, qualquer que seja o nome dela.
 
-**Falta um passo, e só você pode dar:**
+**São dois passos, uma única vez, e ambos só você pode dar:**
 
-> **Tornar o repositório público** — em *Settings → General → Danger Zone →
-> Change repository visibility*. No plano gratuito o GitHub só publica Pages de
-> repositório público. (Alternativa: assinar o GitHub Pro, ~US$ 4/mês, e manter
-> privado.)
+1. **Repositório público** — *Settings → General → Danger Zone → Change
+   repository visibility*. No plano gratuito o GitHub só publica Pages de
+   repositório público. (Alternativa: GitHub Pro, ~US$ 4/mês, e manter privado.)
+2. **Ligar o Pages** — *Settings → Pages → Build and deployment → Source* →
+   escolher **GitHub Actions**.
 
-Feito isso, o próximo envio liga o Pages sozinho e publica em
-`https://rafaelaschumacher.github.io/planilha/`. Enquanto o repositório estiver
-privado, os testes e o build rodam normalmente e só a etapa de publicação
-falha, com a mensagem *"Ensure GitHub Pages has been enabled"*.
+O passo 2 não dá para automatizar: o token do Actions tem permissão de escrever
+no Pages, mas não de criar o site — isso exige direitos de admin.
+
+Feito isso, o próximo envio publica em
+`https://rafaelaschumacher.github.io/planilha/`. Antes disso, os testes e o
+build rodam normalmente e só a etapa de publicação falha, com a mensagem
+*"Ensure GitHub Pages has been enabled"*.
 
 > **Tornar o código público expõe algo?** Não. A aplicação é 100% client-side: o
 > repositório contém **apenas código**, e seus dados financeiros vivem no banco
