@@ -58,5 +58,12 @@ jobs:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
+      # Liga o GitHub Pages sozinho na primeira vez, em vez de exigir que você
+      # vá em Settings → Pages. Só funciona em repositório público (ou conta
+      # Pro): no plano gratuito o Pages não publica de repositório privado.
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
       - id: deploy
         uses: actions/deploy-pages@v4
