@@ -28,7 +28,10 @@ describe('backup criptografado', () => {
 
   it('arquivo adulterado é rejeitado', async () => {
     const backup = await encryptBackup(data, 'minha-senha-forte');
-    backup.payload = `A${backup.payload.slice(1)}`;
+    // Troca o primeiro caractere por um DIFERENTE. Fixar a letra faria o teste
+    // falhar de vez em quando, justamente quando ela já fosse a original.
+    const primeiro = backup.payload[0];
+    backup.payload = `${primeiro === 'A' ? 'B' : 'A'}${backup.payload.slice(1)}`;
     await expect(readBackupFile(JSON.stringify(backup), 'minha-senha-forte')).rejects.toThrow(
       /Senha incorreta ou arquivo corrompido/,
     );
