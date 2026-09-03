@@ -459,14 +459,17 @@ describe('3. Compras parceladas', () => {
     }
   });
 
-  it('nem o valor total da compra é conhecido pela importação', async () => {
+  it('o valor da compra inteira é estimado, e marcado como estimativa', async () => {
     const data = await loadDataset();
     const parcelada = data.transactions.find((t) => t.installmentTotal && t.installmentTotal > 1)!;
-    if (parcelada.purchaseTotalCents === undefined) {
-      nota('',
-        'Parcelas importadas não guardam o valor total da compra: a fatura só traz a parcela do mês, e ' +
-        'inventar o total seria pior do que não ter.');
-    }
+    // O lançamento não inventa um total exato que a fatura não informou…
+    expect(parcelada.purchaseTotalCents).toBeUndefined();
+    // …mas o plano estima, para você ver o tamanho real do compromisso.
+    const plano = installmentPlans(data.transactions, HOJE).find(
+      (p) => p.groupId === parcelada.installmentGroupId,
+    )!;
+    expect(plano.estimated).toBe(true);
+    expect(plano.estimatedTotalCents).toBe(parcelada.amountCents * parcelada.installmentTotal!);
   });
 });
 
@@ -856,7 +859,42 @@ describe('7. Fidelidade total depois das reclassificações', () => {
     const planos = installmentPlans(importado.transactions, HOJE);
     expect(planos.filter((p) => /NOTEBOOK/i.test(p.description))).toHaveLength(1);
     const plano = planos.find((p) => /NOTEBOOK/i.test(p.description))!;
-    expect(plano.paidCents + plano.remainingCents).toBe(plano.totalCents);
+    // O total é a compra INTEIRA, não só as parcelas que já chegaram.
+    expect(plano.paidCents + plano.remainingCents).toBe(plano.estimatedTotalCents);
+    expect(plano.estimated).toBe(true);
+    expect(plano.installmentTotal).toBe(8);
+    expect(plano.paidCount + plano.remainingCount).toBe(8);
+  });
+
+  it('o comprometido reflete a compra inteira, não só a parcela que chegou', async () => {
+    const importado = await loadDataset();
+    const parceladas = importado.transactions.filter((t) => t.installmentTotal === 8);
+    const jaNaBase = sumCents(parceladas.map((t) => t.amountCents));
+    const valorDaParcela = parceladas[0]!.amountCents;
+    const compraInteira = valorDaParcela * 8;
+
+    const view = availability({
+      accounts: importado.accounts,
+      cards: importado.cards,
+      transactions: importado.transactions,
+      recurring: [],
+      today: HOJE,
+      horizonMonths: 24,
+    });
+
+    // As parcelas que faltam entram como previstas, sem repetir as que já
+    // estão nas faturas.
+    const previstas = view.future.items.filter((i) => i.kind === 'installment');
+    expect(previstas).toHaveLength(8 - parceladas.length);
+    expect(view.future.installmentCents).toBe(compraInteira - jaNaBase);
+
+    // Nenhuma parcela é contada duas vezes.
+    expect(new Set(view.future.items.map((i) => i.id)).size).toBe(view.future.items.length);
+
+    observacoes.push(
+      `Compra parcelada: ${formatMoney(jaNaBase)} já em fatura + ${formatMoney(view.future.installmentCents)} ` +
+      `previstos = ${formatMoney(compraInteira)} da compra inteira.`,
+    );
   });
 
   it('duas compras parceladas diferentes na mesma loja NÃO são fundidas', async () => {

@@ -16,6 +16,7 @@
 
 import { sumCents, type Cents } from './money';
 import {
+  addMonths,
   addMonthsToMonth,
   compareDate,
   currentMonth,
@@ -31,12 +32,13 @@ import { normalizeMerchant } from './text';
 import type { Account, Card, ID, RecurringRule, Transaction } from './types';
 import { accountBalance } from './engine';
 
-export type CommitmentKind = 'invoice' | 'scheduled' | 'recurring';
+export type CommitmentKind = 'invoice' | 'scheduled' | 'recurring' | 'installment';
 
 export const COMMITMENT_KIND_LABEL: Record<CommitmentKind, string> = {
   invoice: 'Fatura',
   scheduled: 'Agendado',
   recurring: 'Conta fixa',
+  installment: 'Parcela prevista',
 };
 
 export interface Commitment {
@@ -71,6 +73,8 @@ export interface CommitmentsResult {
   invoiceCents: Cents;
   scheduledCents: Cents;
   recurringCents: Cents;
+  /** Parcelas de compras já feitas que nenhuma fatura trouxe ainda. */
+  installmentCents: Cents;
 }
 
 /**
@@ -98,6 +102,63 @@ function ruleActiveInMonth(rule: RecurringRule, month: ISOMonth): boolean {
   if (month < rule.startMonth) return false;
   if (rule.endMonth && month > rule.endMonth) return false;
   return true;
+}
+
+/**
+ * Agrupa as parcelas importadas de uma mesma compra.
+ * Só considera grupos que vieram de importação: um parcelamento criado aqui
+ * dentro já nasce com todas as parcelas.
+ */
+function importedInstallmentGroups(
+  transactions: readonly Transaction[],
+): Map<ID, Transaction[]> {
+  const groups = new Map<ID, Transaction[]>();
+  for (const tx of transactions) {
+    if (tx.kind !== 'expense') continue;
+    if (!tx.installmentGroupId || !tx.installmentTotal || tx.installmentTotal < 2) continue;
+    if (!tx.importBatchId) continue;
+    const list = groups.get(tx.installmentGroupId) ?? [];
+    list.push(tx);
+    groups.set(tx.installmentGroupId, list);
+  }
+  for (const list of groups.values()) {
+    list.sort((a, b) => (a.installmentNumber ?? 0) - (b.installmentNumber ?? 0));
+  }
+  return groups;
+}
+
+/** As parcelas que a compra ainda vai cobrar e que nenhuma fatura trouxe. */
+function projectMissingInstallments(transactions: readonly Transaction[]): Commitment[] {
+  const projected: Commitment[] = [];
+
+  for (const [groupId, list] of importedInstallmentGroups(transactions)) {
+    const last = list[list.length - 1]!;
+    const total = last.installmentTotal!;
+    const presentes = new Set(list.map((tx) => tx.installmentNumber));
+
+    for (let numero = 1; numero <= total; numero++) {
+      if (presentes.has(numero)) continue;
+      // Só projeta o que vem DEPOIS da última parcela conhecida. Lacuna no
+      // meio é linha que ficou de fora numa importação, e o Diagnóstico avisa.
+      if (numero < (last.installmentNumber ?? 0)) continue;
+
+      const item: Commitment = {
+        id: `parc:${groupId}:${numero}`,
+        kind: 'installment',
+        label: last.description,
+        dueDate: addMonths(last.date, numero - (last.installmentNumber ?? 1)),
+        month: monthOf(addMonths(last.date, numero - (last.installmentNumber ?? 1))),
+        amountCents: last.amountCents,
+        detail: `parcela ${numero} de ${total} · estimada`,
+        overdue: false,
+      };
+      if (last.cardId) item.cardId = last.cardId;
+      if (last.categoryId) item.categoryId = last.categoryId;
+      projected.push(item);
+    }
+  }
+
+  return projected;
 }
 
 export function futureCommitments(input: CommitmentsInput): CommitmentsResult {
@@ -157,7 +218,22 @@ export function futureCommitments(input: CommitmentsInput): CommitmentsResult {
     });
   }
 
-  // 3. Contas fixas ainda não lançadas.
+  // 3. Parcelas de compras já feitas que ainda não chegaram em nenhuma fatura.
+  //
+  // A fatura de cada mês traz UMA parcela. Sem projetar as que faltam, uma
+  // compra de R$ 4.800 em 8x apareceria como R$ 600 de comprometimento — e
+  // parcelamento é justamente o que faz o orçamento fugir do controle.
+  //
+  // Não há risco de contar duas vezes: as parcelas que EXISTEM já estão nas
+  // faturas acima; aqui só entram as que ainda não existem. Quando a fatura
+  // seguinte é importada, a projeção daquele mês desaparece sozinha — o mesmo
+  // mecanismo das contas fixas.
+  for (const projected of projectMissingInstallments(transactions)) {
+    if (compareDate(projected.dueDate, horizonEnd) > 0) continue;
+    items.push(projected);
+  }
+
+  // 4. Contas fixas ainda não lançadas.
   const materialized = materializedRecurring(transactions);
   const fromMonth = monthOf(today);
   for (const month of monthRange(fromMonth, horizonMonth)) {
@@ -202,6 +278,7 @@ export function futureCommitments(input: CommitmentsInput): CommitmentsResult {
     invoiceCents: totalFor('invoice'),
     scheduledCents: totalFor('scheduled'),
     recurringCents: totalFor('recurring'),
+    installmentCents: totalFor('installment'),
   };
 }
 
@@ -282,6 +359,16 @@ export interface InstallmentPlan {
   remainingCents: Cents;
   nextDate?: ISODate;
   lastDate: ISODate;
+  /**
+   * Valor da compra inteira. Quando as parcelas vieram de importação, só as
+   * que já chegaram existem na base — então este total é ESTIMADO pela média
+   * das parcelas conhecidas vezes o total de parcelas.
+   */
+  estimatedTotalCents: Cents;
+  /** Quantas parcelas ainda não apareceram em nenhuma fatura. */
+  missingCount: number;
+  /** `true` quando `estimatedTotalCents` é estimativa, não soma exata. */
+  estimated: boolean;
 }
 
 /** Todas as compras parceladas com o andamento de cada uma. */
@@ -304,20 +391,33 @@ export function installmentPlans(
     const first = list[0]!;
     const past = list.filter((tx) => compareDate(tx.date, today) <= 0);
     const future = list.filter((tx) => compareDate(tx.date, today) > 0);
-    plans.push({
+    const installmentTotal = first.installmentTotal ?? list.length;
+    const knownTotal = sumCents(list.map((tx) => tx.amountCents));
+    const missingCount = Math.max(0, installmentTotal - list.length);
+    // Média das parcelas conhecidas × total: erra por centavos, não por
+    // parcelas inteiras, que é o que importa para decidir.
+    const estimatedTotalCents =
+      missingCount === 0 ? knownTotal : Math.round((knownTotal / list.length) * installmentTotal);
+
+    const plan: InstallmentPlan = {
       groupId,
       description: first.description,
-      cardId: first.cardId,
       // Soma as parcelas existentes: é o valor real, mesmo se alguma foi editada.
-      totalCents: sumCents(list.map((tx) => tx.amountCents)),
-      installmentTotal: first.installmentTotal ?? list.length,
+      totalCents: knownTotal,
+      installmentTotal,
       paidCount: past.length,
-      remainingCount: future.length,
+      remainingCount: future.length + missingCount,
       paidCents: sumCents(past.map((tx) => tx.amountCents)),
-      remainingCents: sumCents(future.map((tx) => tx.amountCents)),
-      nextDate: future[0]?.date,
+      remainingCents: estimatedTotalCents - sumCents(past.map((tx) => tx.amountCents)),
       lastDate: list[list.length - 1]!.date,
-    });
+      estimatedTotalCents,
+      missingCount,
+      estimated: missingCount > 0,
+    };
+    if (first.cardId) plan.cardId = first.cardId;
+    if (future[0]) plan.nextDate = future[0].date;
+    else if (missingCount > 0) plan.nextDate = addMonths(list[list.length - 1]!.date, 1);
+    plans.push(plan);
   }
 
   return plans.sort((a, b) => b.remainingCents - a.remainingCents);

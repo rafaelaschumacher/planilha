@@ -76,13 +76,15 @@ export function Future({ data }: { data: FinanceDataset }) {
           <PanelHeader title="Do que é feito" description="Nada é contado duas vezes" />
           <div className="space-y-3 p-5 text-[13px]">
             <Line label="Faturas de cartão em aberto" value={money(view.future.invoiceCents, hide)} />
+            <Line label="Parcelas que ainda não vieram na fatura" value={money(view.future.installmentCents, hide)} />
             <Line label="Despesas agendadas e previstas" value={money(view.future.scheduledCents, hide)} />
             <Line label="Contas fixas ainda não lançadas" value={money(view.future.recurringCents, hide)} />
             <div className="border-t border-line pt-3">
               <Line label="Total" value={money(view.future.totalCents, hide)} strong />
             </div>
             <p className="pt-1 text-[12px] text-ink-3">
-              As parcelas futuras já estão dentro das faturas — por isso não aparecem somadas outra vez.
+              As parcelas que já apareceram numa fatura estão contadas nela. As que ainda não chegaram entram na
+              linha própria acima — sem isso, uma compra em 8× apareceria como uma parcela só.
             </p>
           </div>
         </Panel>
@@ -205,8 +207,11 @@ export function Future({ data }: { data: FinanceDataset }) {
                   ))}
                 </div>
                 <p className="mt-2 text-[12px] text-ink-3">
-                  Total de {money(plan.totalCents, hide)} · {money(plan.paidCents, hide)} já pagos · última parcela em{' '}
-                  {formatDayMonth(plan.lastDate)}
+                  Compra de {money(plan.estimatedTotalCents, hide)}
+                  {plan.estimated ? ' (estimado)' : ''} · {money(plan.paidCents, hide)} já pagos
+                  {plan.missingCount > 0
+                    ? ` · ${plan.missingCount} parcela(s) ainda não vieram na fatura`
+                    : ` · última parcela em ${formatDayMonth(plan.lastDate)}`}
                 </p>
               </li>
             ))}
