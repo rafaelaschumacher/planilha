@@ -145,7 +145,30 @@ export function auditDataset(data: FinanceDataset, today: ISODate = todayOf()): 
       });
     }
 
-    if (list.length !== expected) {
+    // Parcelas IMPORTADAS chegam uma por fatura: ter menos que o total é o
+    // esperado, não um erro. Acusar isso todo mês treinaria você a ignorar o
+    // Diagnóstico. O que importa num grupo importado é LACUNA no meio da
+    // sequência — parcela 3 ausente entre a 2 e a 4 é gasto que sumiu.
+    const todasImportadas = list.every((tx) => tx.importBatchId);
+    if (todasImportadas) {
+      const presentes = new Set(numbers);
+      const menor = Math.min(...numbers);
+      const maior = Math.max(...numbers);
+      const lacunas: number[] = [];
+      for (let n = menor; n <= maior; n++) if (!presentes.has(n)) lacunas.push(n);
+      if (lacunas.length > 0) {
+        installmentProblems++;
+        push({
+          id: `installment-gap-${groupId}`,
+          severity: 'warning',
+          group: 'Parcelamento',
+          title: `"${first.description}": falta a parcela ${lacunas.join(', ')} de ${expected}`,
+          detail:
+            'As parcelas vizinhas foram importadas, mas essa não. Provavelmente a linha ficou desmarcada numa importação.',
+          transactionIds: list.map((tx) => tx.id),
+        });
+      }
+    } else if (list.length !== expected) {
       installmentProblems++;
       push({
         id: `installment-count-${groupId}`,

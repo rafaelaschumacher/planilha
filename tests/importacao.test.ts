@@ -278,7 +278,7 @@ describe('correções encontradas na auditoria', () => {
       existing: [],
       rules,
       paymentCardId: 'card',
-      paymentCard: card,
+      cards: [card],
     };
     const preview = buildImportPreview(extrato, contexto);
     expect(preview.rows[0]!.kind).toBe('card_payment');

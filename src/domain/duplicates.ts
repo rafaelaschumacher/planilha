@@ -34,6 +34,8 @@ export interface DuplicateCandidate {
   description: string;
   accountId?: string;
   cardId?: string;
+  /** Conta de destino, quando o lançamento é uma transferência. */
+  toAccountId?: string;
   externalId?: string;
   installmentNumber?: number;
 }
@@ -60,6 +62,23 @@ export function scoreDuplicate(a: DuplicateCandidate, b: Transaction): Duplicate
   if (a.amountCents !== b.amountCents) return { score: 0, reasons: [] };
   reasons.push('mesmo valor');
   let score = 0.45;
+
+  // A MESMA transferência aparece nos dois extratos: como saída na conta de
+  // origem e como entrada na de destino. Depois de reclassificada, o par de
+  // contas identifica o movimento — e as descrições ("TRANSFERENCIA ENVIADA"
+  // x "TRANSFERENCIA RECEBIDA") são diferentes de propósito, então comparar
+  // texto não resolveria.
+  if (a.kind === 'transfer' && b.kind === 'transfer') {
+    const parA = [a.accountId, a.toAccountId].filter(Boolean).sort().join('|');
+    const parB = [b.accountId, b.toAccountId].filter(Boolean).sort().join('|');
+    if (parA && parA === parB) {
+      const dias = Math.abs(diffDays(a.date, b.date));
+      if (dias <= 2) {
+        return { score: 1, reasons: ['mesma transferência entre as duas contas'] };
+      }
+    }
+    return { score: 0, reasons: [] };
+  }
 
   const days = Math.abs(diffDays(a.date, b.date));
   if (days === 0) {

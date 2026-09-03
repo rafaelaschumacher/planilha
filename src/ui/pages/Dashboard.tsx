@@ -20,10 +20,10 @@ import {
 import { accountBalances, averageExpense, monthSummary, weekSummary } from '../../domain/engine';
 import { availability } from '../../domain/commitments';
 import { budgetOverall, budgetStatuses } from '../../domain/budget';
-import { cardUsage, currentInvoice } from '../../domain/invoice';
+import { cardUsage, currentInvoice, monthCoverageGaps } from '../../domain/invoice';
 import { buildAlerts } from '../../domain/alerts';
 import type { FinanceDataset } from '../../domain/types';
-import { Badge, Button, EmptyState, Panel, PanelHeader } from '../components/primitives';
+import { Badge, Button, EmptyState, Notice, Panel, PanelHeader } from '../components/primitives';
 import { MonthlyBars, Meter, RankedBars, SplitBar, StatTile } from '../components/charts';
 import { money } from '../format';
 import { navigate } from '../router';
@@ -88,6 +88,13 @@ export function Dashboard({ data, onAdd }: { data: FinanceDataset; onAdd: () => 
 
   const alerts = useMemo(() => buildAlerts(data, today), [data, today]);
 
+  // Compras feitas depois do fechamento do cartão só entram na fatura
+  // seguinte: até ela chegar, o total do mês ainda vai crescer.
+  const coverage = useMemo(
+    () => monthCoverageGaps(data.cards, data.transactions, month),
+    [data.cards, data.transactions, month],
+  );
+
   const invoices = useMemo(
     () =>
       data.cards
@@ -124,6 +131,18 @@ export function Dashboard({ data, onAdd }: { data: FinanceDataset; onAdd: () => 
   return (
     <div className="space-y-5">
       {alerts.length > 0 ? <AlertStrip alerts={alerts.slice(0, 3)} total={alerts.length} /> : null}
+
+      {coverage.length > 0 ? (
+        <Notice tone="info" title="Este mês ainda não está fechado">
+          {coverage
+            .map(
+              (gap) =>
+                `As compras no ${gap.cardName} de ${formatDayMonth(gap.from)} até ${formatDayMonth(gap.to)} entram na fatura que vence em ${formatDayMonth(gap.dueDate)}.`,
+            )
+            .join(' ')}{' '}
+          Enquanto essa fatura não for importada, a despesa deste mês ainda vai crescer.
+        </Notice>
+      ) : null}
 
       {/* Os quatro números que respondem "como estou agora?" */}
       <Panel className="p-5">

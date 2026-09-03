@@ -212,12 +212,22 @@ Leva poucos minutos.
 
 ```
 1. Importar o extrato da conta          → Importar
-2. Importar a fatura do cartão          → Importar
-3. Revisar as categorias pendentes      → Lançamentos › "Revisar categoria"
-4. Conferir as duplicidades apontadas   → Diagnóstico
-5. Registrar o pagamento da fatura      → Cartões › "Registrar pagamento"
+2. Na prévia, marcar as transferências  → trocar o tipo e escolher a outra conta
+3. Importar a fatura do cartão          → Importar
+4. Revisar as categorias pendentes      → Lançamentos › "Revisar categoria"
+5. Conferir as duplicidades apontadas   → Diagnóstico
 6. Exportar o backup                    → Ajustes › Backup
 ```
+
+### Um mês só fecha depois que a fatura do mês seguinte chega
+
+Compras feitas **após o dia de fechamento** do cartão não entram na fatura
+daquele mês — entram na próxima. Isso significa que o total de um mês continua
+crescendo até você importar a fatura seguinte.
+
+Está financeiramente correto (é o regime de competência), e a plataforma avisa:
+o dashboard e a visão mensal mostram um aviso dizendo exatamente qual pedaço do
+mês ainda não tem fatura. O aviso desaparece quando ela é importada.
 
 O dashboard, os totais do mês, a visão semanal e os compromissos futuros se
 atualizam sozinhos — não existe nada para recalcular à mão.
@@ -250,13 +260,32 @@ sugerida, parcela reconhecida e avisos. Dá para desmarcar qualquer linha e
 corrigir a categoria antes de importar. Toda importação pode ser **desfeita**
 depois.
 
-### Dois cuidados que evitam contar o mesmo dinheiro duas vezes
+### Você pode trocar o TIPO de cada linha, não só a categoria
+
+Um extrato não sabe a diferença entre um gasto e um dinheiro que você moveu de
+uma conta sua para outra. Por isso a prévia deixa você trocar o tipo de cada
+linha:
+
+| Situação no extrato | Palpite do sistema | Você troca para | Por que importa |
+|---|---|---|---|
+| Aporte na reserva | Despesa | **Transferência** | Sem isso, mover dinheiro entre suas contas contaria como gasto |
+| Rateio de conta recebido | Receita | **Reembolso** | Reembolso REDUZ a despesa da categoria em vez de inflar a receita |
+| Débito da fatura do cartão | Pagamento de fatura | — | Já vem certo se você escolher o cartão |
+
+Ao escolher "Transferência", aparece um segundo campo para a outra conta. A
+linha fica **bloqueada** até você preencher — ela não tem como virar um
+lançamento válido sem isso.
+
+### Três cuidados que evitam contar o mesmo dinheiro duas vezes
 
 1. **Na fatura do cartão**, a linha "pagamento recebido" já vem **desmarcada** —
    ela costuma estar também no extrato da conta.
-2. **No extrato da conta**, uma saída que parece pagamento de fatura pede que
-   você escolha o cartão. Sem isso ela viraria despesa comum e duplicaria todas
-   as compras daquele cartão.
+2. **No extrato da conta**, uma saída que parece pagamento de fatura vem
+   **bloqueada** até você escolher o cartão. Como despesa comum ela duplicaria
+   todas as compras daquele cartão.
+3. **Se você importar os extratos das duas contas**, a transferência aparece nos
+   dois — como saída num e entrada no outro. Depois de reclassificada, o par de
+   contas identifica o movimento e a segunda é reconhecida como duplicidade.
 
 ### Detecção de duplicidade
 
@@ -338,7 +367,7 @@ de nada. O arquivo `.env.example` está no repositório como referência.
 npm test
 ```
 
-224 testes cobrindo as regras financeiras. Os principais:
+265 testes cobrindo as regras financeiras. Os principais:
 
 | Arquivo | O que garante |
 |---|---|
@@ -350,6 +379,29 @@ npm test
 | `importacao.test.ts` | CSV/OFX de vários bancos, duplicidade, linhas de pagamento |
 | `auditoria.test.ts` | Coerência entre dashboard, semana, mês, faturas e saldos |
 | `backup.test.ts` | Criptografia, senha errada, arquivo adulterado |
+| `fluxo-mensal.test.ts` | **O fluxo mensal inteiro, de ponta a ponta** (abaixo) |
+
+### O teste do fluxo mensal
+
+`fluxo-mensal.test.ts` faz o caminho de volta: pega os dados fictícios, **gera
+os arquivos que um banco realmente exportaria** para eles (CSV brasileiro, OFX
+com FITID, fatura com sufixo de parcela) e importa num banco vazio pelo pipeline
+de verdade — passando pelo IndexedDB, não só pelas funções puras. Depois compara
+o resultado com o original, mês a mês.
+
+Ele garante o que a plataforma existe para fazer:
+
+- importar um mês novo **não altera, não remove e não duplica** nenhum
+  lançamento anterior — verificado assinatura por assinatura;
+- reimportar o mesmo arquivo (CSV ou OFX) **não grava nada**;
+- assinatura mensal de valor igual **não** virá falso positivo de duplicidade;
+- as parcelas de uma compra, chegando em faturas de meses diferentes, formam
+  **um único parcelamento** — e duas compras diferentes na mesma loja não são
+  fundidas;
+- desfazer uma importação **volta exatamente** ao estado anterior;
+- e, com as duas reclassificações que só você pode decidir (transferência e
+  reembolso), o resultado importado reproduz **exatamente** receita, despesa e
+  saldo dos dados originais.
 
 Alguns testes verificam propriedades, não só exemplos: a divisão em parcelas é
 conferida em **4.800 combinações** de valor e número de parcelas, e cada compra

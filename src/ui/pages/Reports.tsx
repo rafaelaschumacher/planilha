@@ -15,8 +15,9 @@ import {
   today as todayOf,
 } from '../../domain/dates';
 import { averageExpense, monthSummary, periodSummary, weekSummary } from '../../domain/engine';
+import { monthCoverageGaps } from '../../domain/invoice';
 import { PAYMENT_METHOD_LABEL, type FinanceDataset } from '../../domain/types';
-import { Button, EmptyState, Panel, PanelHeader, Select } from '../components/primitives';
+import { Button, EmptyState, Notice, Panel, PanelHeader, Select } from '../components/primitives';
 import { MonthlyBars, RankedBars, SplitBar } from '../components/charts';
 import { money } from '../format';
 import { navigate } from '../router';
@@ -64,6 +65,11 @@ export function Reports({ data }: { data: FinanceDataset }) {
     }
     return list;
   }, [today, data.transactions, categoryMap, data.settings.firstDayOfWeek]);
+
+  const coverage = useMemo(
+    () => monthCoverageGaps(data.cards, data.transactions, month),
+    [data.cards, data.transactions, month],
+  );
 
   const periodTotals = useMemo(
     () => periodSummary(data.transactions, startOfMonth(months[0]!), endOfMonth(months[months.length - 1]!), categoryMap),
@@ -114,6 +120,18 @@ export function Reports({ data }: { data: FinanceDataset }) {
 
       {tab === 'mensal' ? (
         <>
+          {coverage.length > 0 ? (
+            <Notice tone="info" title={`${formatMonthLong(month)} ainda não está fechado`}>
+              {coverage
+                .map(
+                  (gap) =>
+                    `Compras no ${gap.cardName} entre ${gap.from.slice(8, 10)}/${gap.from.slice(5, 7)} e ${gap.to.slice(8, 10)}/${gap.to.slice(5, 7)} só aparecem na fatura que vence em ${gap.dueDate.slice(8, 10)}/${gap.dueDate.slice(5, 7)}.`,
+                )
+                .join(' ')}{' '}
+              Importe essa fatura para o mês ficar completo.
+            </Notice>
+          ) : null}
+
           <Panel className="p-5">
             <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
               <Stat label="Receitas" value={money(summary.incomeCents, hide)} tone="in" delta={summary.incomeCents - previous.incomeCents} hide={hide} />

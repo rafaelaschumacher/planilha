@@ -20,6 +20,7 @@ import {
   addMonthsToMonth,
   compareDate,
   dayInMonth,
+  endOfMonth,
   isBetween,
   monthOf,
   monthRange,
@@ -347,4 +348,73 @@ export function cardUsage(card: Card, transactions: readonly Transaction[]): Car
     availableCents,
     usageRatio: card.limitCents > 0 ? usedCents / card.limitCents : 0,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Cobertura do mês
+// ---------------------------------------------------------------------------
+
+export interface MonthCoverageGap {
+  cardId: ID;
+  cardName: string;
+  /** Primeiro dia do mês cujas compras ainda não têm fatura. */
+  from: ISODate;
+  /** Último dia do mês. */
+  to: ISODate;
+  /** Fatura que vai trazer essas compras. */
+  pendingRef: ISOMonth;
+  dueDate: ISODate;
+}
+
+/**
+ * Descobre o pedaço do fim do mês que ainda não tem fatura.
+ *
+ * Uma compra feita depois do fechamento do cartão só aparece na fatura
+ * seguinte. Então o total de um mês só está COMPLETO depois que a fatura do
+ * mês seguinte é importada — antes disso ele cresce sozinho.
+ *
+ * Isso não é um erro de cálculo, é como o cartão funciona. O problema é o
+ * usuário não saber: ele olha o mês, considera fechado, e o número muda
+ * depois. Esta função existe para a interface poder dizer isso.
+ */
+export function monthCoverageGaps(
+  cards: readonly Card[],
+  transactions: readonly Transaction[],
+  month: ISOMonth,
+): MonthCoverageGap[] {
+  const monthStart = dayInMonth(month, 1);
+  const monthEnd = endOfMonth(month);
+  const gaps: MonthCoverageGap[] = [];
+
+  for (const card of cards) {
+    if (card.archived) continue;
+
+    // Fatura que carrega as compras do FIM do mês.
+    const pendingRef = invoiceRefForDate(card, monthEnd);
+    const period = invoicePeriod(card, pendingRef);
+
+    // Se o período já começa antes do mês, o mês inteiro cabe nessa fatura:
+    // não existe pedaço partido.
+    if (compareDate(period.start, monthStart) <= 0) continue;
+
+    // Já existe algum lançamento nesse período? Então a fatura chegou.
+    const chegou = transactions.some(
+      (tx) =>
+        tx.cardId === card.id &&
+        (tx.kind === 'expense' || tx.kind === 'refund' || tx.kind === 'chargeback') &&
+        isBetween(tx.date, period.start, period.end),
+    );
+    if (chegou) continue;
+
+    gaps.push({
+      cardId: card.id,
+      cardName: card.name,
+      from: period.start,
+      to: monthEnd,
+      pendingRef,
+      dueDate: period.dueDate,
+    });
+  }
+
+  return gaps;
 }

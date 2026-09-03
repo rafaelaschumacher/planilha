@@ -9,16 +9,17 @@
  */
 
 import { sumCents, type Cents } from '../domain/money';
-import { compareDate, type ISODate } from '../domain/dates';
-import { normalize } from '../domain/text';
+import { addMonths, compareDate, diffDays, type ISODate } from '../domain/dates';
+import { normalize, normalizeMerchant } from '../domain/text';
 import { suggestCategory } from '../domain/categorize';
 import {
   DUPLICATE_STRONG_THRESHOLD,
   DUPLICATE_THRESHOLD,
   findDuplicates,
+  type DuplicateCandidate,
   type DuplicateMatch,
 } from '../domain/duplicates';
-import { buildTransaction, type TransactionDraft } from '../domain/transaction';
+import { buildTransaction, newId, type TransactionDraft } from '../domain/transaction';
 import { invoiceRefForPaymentDate } from '../domain/invoice';
 import type {
   Card,
@@ -41,20 +42,27 @@ export interface ImportContext {
   rules: readonly CategoryRule[];
   /** Conta usada quando uma linha for reconhecida como pagamento de fatura. */
   paymentAccountId?: ID;
-  /** Cartão usado quando uma linha do extrato parecer pagamento de fatura. */
+  /** Cartão sugerido quando uma linha do extrato parecer pagamento de fatura. */
   paymentCardId?: ID;
   /**
-   * O cartão em si, para descobrir em qual fatura o pagamento cai.
-   * Sem ele o pagamento fica sem referência — e a alocação por ordem de
-   * vencimento resolve, que é o comportamento correto de reserva.
+   * Todos os cartões cadastrados. Necessário porque você pode escolher, numa
+   * linha específica, um cartão diferente do sugerido — e cada cartão tem seu
+   * próprio ciclo de fechamento, que decide em qual fatura o pagamento cai.
    */
-  paymentCard?: Card;
+  cards?: readonly Card[];
 }
 
 export interface PreviewRow {
   key: string;
   parsed: ParsedRow;
+  /**
+   * Tipo da movimentação. Começa no que o sistema reconheceu e pode ser
+   * TROCADO por você na prévia — é assim que uma transferência entre suas
+   * contas para de ser lida como despesa.
+   */
   kind: TransactionKind;
+  /** Tipos que fazem sentido para esta linha, dado o destino da importação. */
+  availableKinds: TransactionKind[];
   /** Valor absoluto em centavos — o sinal já virou `kind`. */
   amountCents: Cents;
   date: ISODate;
@@ -63,12 +71,24 @@ export interface PreviewRow {
   categorySource: 'manual' | 'rule' | 'inferred' | 'none';
   needsReview: boolean;
   isFixed: boolean;
+  /** A outra conta, quando o tipo é transferência. */
+  counterAccountId?: ID;
+  /** O cartão, quando o tipo é pagamento de fatura. */
+  paymentCardId?: ID;
   duplicates: DuplicateMatch[];
   duplicateScore: number;
   /** Marcada = será importada. */
   selected: boolean;
+  /** Avisos de classificação, com código: saem de cena quando você age. */
+  hints: Hint[];
+  /** Texto final dos avisos, recalculado a cada edição sua. */
   warnings: string[];
   invoiceRef?: string;
+  /**
+   * Preenchido quando falta uma informação para gravar (a conta de destino de
+   * uma transferência, por exemplo). Enquanto existir, a linha não é importada.
+   */
+  blocked?: string;
 }
 
 export interface ImportPreview {
@@ -82,6 +102,8 @@ export interface ImportPreview {
     selected: number;
     duplicates: number;
     needsReview: number;
+    /** Linhas que precisam de uma escolha sua antes de poderem ser importadas. */
+    blocked: number;
     incomeCents: Cents;
     expenseCents: Cents;
     firstDate?: ISODate;
@@ -99,21 +121,47 @@ const INVOICE_PAYMENT_RE =
 const TRANSFER_RE = /\btransfer|\bted\b|\bdoc\b|entre\s+contas|transferencia/;
 const CARD_CREDIT_RE = /estorno|devolucao|credito\s+de\s+ajuste|cashback|reembolso/;
 
+/** Tipos oferecidos na prévia, conforme o destino da importação. */
+const ACCOUNT_KINDS: TransactionKind[] = [
+  'expense', 'income', 'transfer', 'card_payment', 'refund', 'chargeback',
+];
+const CARD_KINDS: TransactionKind[] = ['expense', 'chargeback', 'refund', 'card_payment'];
+
+/**
+ * Aviso de classificação, com código.
+ *
+ * O código existe para o aviso DESAPARECER quando você já agiu sobre ele:
+ * um "parece transferência" que continua na tela depois de você trocar o tipo
+ * ensina a ignorar avisos.
+ */
+export type HintCode = 'maybe-transfer' | 'needs-card' | 'payment-on-invoice';
+
+export interface Hint {
+  code: HintCode;
+  text: string;
+}
+
+export interface Classification {
+  kind: TransactionKind;
+  hints: Hint[];
+  selected: boolean;
+  paymentCardId?: ID;
+}
+
 /**
  * Decide o tipo de cada linha.
+ *
+ * É um PALPITE, não um veredito: a prévia deixa você trocar o tipo. O que o
+ * código faz aqui é acertar o caso comum e, nos casos em que errar sairia
+ * caro, vir DESMARCADO em vez de arriscar.
  *
  * O cuidado principal está nas linhas de PAGAMENTO DE FATURA, que aparecem
  * tanto no extrato da conta quanto na fatura do cartão. Importar as duas
  * contaria o mesmo dinheiro duas vezes.
  */
-function classifyRow(row: ParsedRow, context: ImportContext): {
-  kind: TransactionKind;
-  warnings: string[];
-  selected: boolean;
-  cardIdOverride?: ID;
-} {
+export function classifyRow(row: ParsedRow, context: ImportContext): Classification {
   const text = normalize(row.description);
-  const warnings: string[] = [];
+  const hints: Hint[] = [];
   const isOutflow = row.amountCents < 0;
 
   if (context.target.type === 'card') {
@@ -121,34 +169,250 @@ function classifyRow(row: ParsedRow, context: ImportContext): {
     if (INVOICE_PAYMENT_RE.test(text)) {
       return {
         kind: 'card_payment',
-        warnings: [
-          'Linha de pagamento da fatura. Ela normalmente já vem no extrato da conta — importar aqui contaria o pagamento duas vezes.',
+        hints: [
+          {
+            code: 'payment-on-invoice',
+            text: 'Linha de pagamento da fatura. Ela normalmente já vem no extrato da conta — importar aqui contaria o pagamento duas vezes.',
+          },
         ],
         selected: false, // desmarcada por padrão: o risco de duplicar é real
       };
     }
     if (CARD_CREDIT_RE.test(text) || row.amountCents < 0) {
-      return { kind: 'chargeback', warnings: [], selected: true };
+      return { kind: 'chargeback', hints: [], selected: true };
     }
-    return { kind: 'expense', warnings: [], selected: true };
+    return { kind: 'expense', hints: [], selected: true };
   }
 
   // --- Extrato de conta --------------------------------------------------
   if (isOutflow && INVOICE_PAYMENT_RE.test(text)) {
     if (context.paymentCardId) {
-      return { kind: 'card_payment', warnings: [], selected: true, cardIdOverride: context.paymentCardId };
+      return { kind: 'card_payment', hints: [], selected: true, paymentCardId: context.paymentCardId };
     }
-    warnings.push(
-      'Parece pagamento de fatura. Escolha o cartão para não contar o gasto duas vezes — como despesa, ele duplicaria as compras do cartão.',
-    );
-    return { kind: 'expense', warnings, selected: true };
+    // Sem saber o cartão, esta linha viraria despesa comum e duplicaria TODAS
+    // as compras daquela fatura. Vem desmarcada: um "Importar" distraído não
+    // pode custar isso.
+    return {
+      kind: 'card_payment',
+      hints: [
+        {
+          code: 'needs-card',
+          text: 'Parece pagamento de fatura. Escolha o cartão ao lado para importar — como despesa comum, esta linha duplicaria todas as compras daquele cartão.',
+        },
+      ],
+      selected: false,
+    };
   }
 
   if (TRANSFER_RE.test(text)) {
-    warnings.push('Pode ser transferência entre suas contas. Se for, reclassifique para não afetar receitas e despesas.');
+    hints.push({
+      code: 'maybe-transfer',
+      text: 'Parece transferência entre suas contas. Se for, troque o tipo para "Transferência" e escolha a outra conta — assim ela não entra como despesa nem como receita.',
+    });
   }
 
-  return { kind: isOutflow ? 'expense' : 'income', warnings, selected: true };
+  return { kind: isOutflow ? 'expense' : 'income', hints, selected: true };
+}
+
+/**
+ * Verifica se falta algo para a linha poder ser gravada.
+ * Transferência sem a outra conta e pagamento de fatura sem cartão não têm
+ * como virar lançamento válido.
+ */
+export function blockingReason(row: PreviewRow, context: ImportContext): string | undefined {
+  if (row.kind === 'transfer') {
+    if (context.target.type !== 'account') return 'Transferência só faz sentido num extrato de conta.';
+    if (!row.counterAccountId) return 'Escolha a outra conta da transferência.';
+    if (row.counterAccountId === context.target.accountId) {
+      return 'A outra conta precisa ser diferente desta.';
+    }
+  }
+  if (row.kind === 'card_payment') {
+    const card = context.target.type === 'card' ? context.target.cardId : (row.paymentCardId ?? context.paymentCardId);
+    if (!card) return 'Escolha o cartão cuja fatura foi paga.';
+    if (context.target.type === 'card' && !context.paymentAccountId) {
+      return 'Escolha a conta que pagou a fatura.';
+    }
+  }
+  return undefined;
+}
+
+/** O cartão de uma linha: o escolhido nela, o sugerido, ou o próprio destino. */
+function cardForRow(row: PreviewRow, context: ImportContext): Card | undefined {
+  if (context.target.type === 'card') return context.target.card;
+  const id = row.paymentCardId ?? context.paymentCardId;
+  if (!id) return undefined;
+  return context.cards?.find((c) => c.id === id);
+}
+
+/**
+ * Recalcula o que depende das escolhas feitas na prévia: duplicidade, avisos e
+ * o que ainda falta preencher.
+ *
+ * Precisa rodar a cada edição sua. A duplicidade de uma transferência, por
+ * exemplo, só pode ser avaliada DEPOIS que você diz qual é a outra conta —
+ * é o par de contas que identifica o movimento nos dois extratos.
+ */
+export function refreshRow(row: PreviewRow, context: ImportContext): PreviewRow {
+  const next: PreviewRow = { ...row };
+  // Se a linha estava fora só por faltar uma informação, completar essa
+  // informação devolve a marcação — igual ao que acontece quando o cartão é
+  // escolhido no campo do topo.
+  const estavaBloqueada = Boolean(row.blocked);
+
+  const targetAccountId = context.target.type === 'account' ? context.target.accountId : undefined;
+  const targetCardId = context.target.type === 'card' ? context.target.cardId : undefined;
+
+  const candidate: DuplicateCandidate = {
+    kind: next.kind,
+    date: next.date,
+    description: next.description,
+    amountCents: next.amountCents,
+  };
+  if (next.parsed.externalId) candidate.externalId = next.parsed.externalId;
+  if (next.parsed.installmentNumber) candidate.installmentNumber = next.parsed.installmentNumber;
+
+  if (next.kind === 'transfer') {
+    // As duas pontas, na ordem real do movimento.
+    if (next.parsed.amountCents < 0) {
+      if (targetAccountId) candidate.accountId = targetAccountId;
+      if (next.counterAccountId) candidate.toAccountId = next.counterAccountId;
+    } else {
+      if (next.counterAccountId) candidate.accountId = next.counterAccountId;
+      if (targetAccountId) candidate.toAccountId = targetAccountId;
+    }
+  } else if (next.kind === 'card_payment') {
+    const cardId = targetCardId ?? next.paymentCardId ?? context.paymentCardId;
+    if (cardId) candidate.cardId = cardId;
+    // A fatura quitada depende do ciclo daquele cartão, então é recalculada
+    // sempre que você troca o cartão da linha.
+    const card = cardForRow(next, context);
+    if (card) next.invoiceRef = invoiceRefForPaymentDate(card, next.date);
+    else delete next.invoiceRef;
+  } else {
+    if (targetCardId) candidate.cardId = targetCardId;
+    else if (targetAccountId) candidate.accountId = targetAccountId;
+  }
+
+  next.duplicates = findDuplicates(candidate, context.existing, DUPLICATE_THRESHOLD);
+  next.duplicateScore = next.duplicates[0]?.score ?? 0;
+
+  // Reconstrói os avisos do zero. Um conselho que você já seguiu sai da tela.
+  const warnings: string[] = [];
+  for (const hint of next.hints) {
+    if (hint.code === 'maybe-transfer' && next.kind === 'transfer') continue;
+    if (hint.code === 'needs-card' && cardForRow(next, context)) continue;
+    if (hint.code === 'payment-on-invoice' && next.kind !== 'card_payment') continue;
+    warnings.push(hint.text);
+  }
+  if (next.duplicateScore >= DUPLICATE_STRONG_THRESHOLD) {
+    warnings.push('Possível duplicidade: já existe um lançamento praticamente idêntico.');
+  } else if (next.duplicateScore >= DUPLICATE_THRESHOLD) {
+    warnings.push('Possível duplicidade — confira antes de importar.');
+  }
+  next.warnings = warnings;
+
+  const blocked = blockingReason(next, context);
+  if (blocked) {
+    next.blocked = blocked;
+    next.selected = false;
+  } else {
+    delete next.blocked;
+    if (next.duplicateScore >= DUPLICATE_STRONG_THRESHOLD) next.selected = false;
+    else if (estavaBloqueada) next.selected = true;
+  }
+  return next;
+}
+
+/** Aplica uma troca de tipo feita por você, recalculando o que depende dela. */
+export function changeRowKind(
+  row: PreviewRow,
+  kind: TransactionKind,
+  context: ImportContext,
+): PreviewRow {
+  const next: PreviewRow = { ...row, kind };
+
+  // Categoria só existe em despesa e receita.
+  if (kind !== 'expense' && kind !== 'income' && kind !== 'refund' && kind !== 'chargeback') {
+    delete next.categoryId;
+    next.categorySource = 'none';
+    next.needsReview = false;
+  }
+  if (kind !== 'transfer') delete next.counterAccountId;
+  if (kind !== 'card_payment') {
+    delete next.paymentCardId;
+    delete next.invoiceRef;
+  } else if (context.paymentCardId && !next.paymentCardId) {
+    next.paymentCardId = context.paymentCardId;
+  }
+
+  return refreshRow(next, context);
+}
+
+
+// ---------------------------------------------------------------------------
+// Reconciliação de parcelas entre importações
+// ---------------------------------------------------------------------------
+
+/** Tolerância de dias entre a data esperada de uma parcela e a data real. */
+const INSTALLMENT_DATE_TOLERANCE_DAYS = 6;
+
+/**
+ * Descobre a qual compra parcelada uma parcela recém-importada pertence.
+ *
+ * A fatura de cada mês traz UMA parcela ("NOTEBOOK LOJA ELETRO 03/08"). Para
+ * que as oito parcelas formem uma única compra, é preciso reconhecer que a
+ * parcela deste mês continua a que veio no mês passado.
+ *
+ * Não serve derivar a chave da descrição: ela carrega o número da parcela, que
+ * muda todo mês. Nem incluir o valor: o centavo de resto faz a primeira
+ * parcela ser um centavo maior que as outras.
+ *
+ * A reconciliação usa três coisas que de fato identificam a compra:
+ *  · o mesmo estabelecimento (já sem o sufixo de parcela);
+ *  · o mesmo número TOTAL de parcelas;
+ *  · a data compatível — a parcela 5 tem de cair cinco meses depois da 1.
+ *
+ * E exige que aquele número de parcela ainda não exista no grupo, para que duas
+ * compras diferentes na mesma loja, com o mesmo número de parcelas, não sejam
+ * fundidas numa só.
+ */
+export function resolveInstallmentGroup(
+  row: { description: string; date: ISODate; installmentNumber: number; installmentTotal: number; cardId?: ID },
+  known: readonly Transaction[],
+): ID {
+  const merchant = normalizeMerchant(row.description);
+
+  const candidates = known.filter(
+    (tx) =>
+      tx.installmentGroupId &&
+      tx.installmentTotal === row.installmentTotal &&
+      tx.cardId === row.cardId &&
+      normalizeMerchant(tx.description) === merchant,
+  );
+
+  const byGroup = new Map<ID, Transaction[]>();
+  for (const tx of candidates) {
+    const list = byGroup.get(tx.installmentGroupId!) ?? [];
+    list.push(tx);
+    byGroup.set(tx.installmentGroupId!, list);
+  }
+
+  let best: { groupId: ID; distance: number } | undefined;
+  for (const [groupId, members] of byGroup) {
+    // Aquele número de parcela já está no grupo: é outra compra.
+    if (members.some((m) => m.installmentNumber === row.installmentNumber)) continue;
+
+    for (const member of members) {
+      if (!member.installmentNumber) continue;
+      const expected = addMonths(member.date, row.installmentNumber - member.installmentNumber);
+      const distance = Math.abs(diffDays(row.date, expected));
+      if (distance > INSTALLMENT_DATE_TOLERANCE_DAYS) continue;
+      if (!best || distance < best.distance) best = { groupId, distance };
+    }
+  }
+
+  return best?.groupId ?? newId('parc');
 }
 
 export function buildImportPreview(parsed: ParseResult, context: ImportContext): ImportPreview {
@@ -158,39 +422,17 @@ export function buildImportPreview(parsed: ParseResult, context: ImportContext):
   const history: Transaction[] = [...context.existing];
 
   for (const parsedRow of parsed.rows) {
-    const { kind, warnings, selected, cardIdOverride } = classifyRow(parsedRow, context);
+    const classification = classifyRow(parsedRow, context);
+    const { kind } = classification;
     const amountCents = Math.abs(parsedRow.amountCents);
 
-    const accountId = context.target.type === 'account' ? context.target.accountId : undefined;
-    const cardId = cardIdOverride ?? (context.target.type === 'card' ? context.target.cardId : undefined);
 
     const suggestion =
       kind === 'expense' || kind === 'income'
         ? suggestCategory({ description: parsedRow.description, rules: context.rules, history })
         : { categoryId: undefined, source: 'none' as const, confidence: 1, needsReview: false, isFixed: undefined };
 
-    const duplicateSource: Parameters<typeof findDuplicates>[0] = {
-      kind,
-      date: parsedRow.date,
-      description: parsedRow.description,
-      amountCents,
-    };
-    if (accountId && kind !== 'card_payment') duplicateSource.accountId = accountId;
-    if (cardId) duplicateSource.cardId = cardId;
-    if (parsedRow.externalId) duplicateSource.externalId = parsedRow.externalId;
-    if (parsedRow.installmentNumber) duplicateSource.installmentNumber = parsedRow.installmentNumber;
-
-    const duplicates = findDuplicates(duplicateSource, context.existing, DUPLICATE_THRESHOLD);
-    const duplicateScore = duplicates[0]?.score ?? 0;
-
-    const rowWarnings = [...warnings];
-    if (duplicateScore >= DUPLICATE_STRONG_THRESHOLD) {
-      rowWarnings.push('Possível duplicidade: já existe um lançamento praticamente idêntico.');
-    } else if (duplicateScore >= DUPLICATE_THRESHOLD) {
-      rowWarnings.push('Possível duplicidade — confira antes de importar.');
-    }
-
-    const row: PreviewRow = {
+    const draftRow: PreviewRow = {
       key: `${parsedRow.sourceLine}-${parsedRow.date}-${amountCents}`,
       parsed: parsedRow,
       kind,
@@ -200,16 +442,19 @@ export function buildImportPreview(parsed: ParseResult, context: ImportContext):
       categorySource: suggestion.source,
       needsReview: suggestion.needsReview,
       isFixed: suggestion.isFixed ?? false,
-      duplicates,
-      duplicateScore,
-      selected: selected && duplicateScore < DUPLICATE_STRONG_THRESHOLD,
-      warnings: rowWarnings,
+      availableKinds: context.target.type === 'card' ? CARD_KINDS : ACCOUNT_KINDS,
+      duplicates: [],
+      duplicateScore: 0,
+      selected: classification.selected,
+      hints: classification.hints,
+      warnings: [],
     };
-    if (suggestion.categoryId) row.categoryId = suggestion.categoryId;
-    if (kind === 'card_payment' && cardId && context.target.type === 'account' && context.paymentCard) {
-      row.invoiceRef = invoiceRefForPaymentDate(context.paymentCard, parsedRow.date);
-    }
+    if (suggestion.categoryId) draftRow.categoryId = suggestion.categoryId;
+    if (classification.paymentCardId) draftRow.paymentCardId = classification.paymentCardId;
 
+    // Duplicidade, avisos e bloqueio saem do mesmo lugar que roda depois de
+    // cada edição sua — assim a prévia inicial e a editada seguem a mesma regra.
+    const row = refreshRow(draftRow, context);
     rows.push(row);
 
     // Alimenta o histórico para as próximas linhas do mesmo arquivo.
@@ -246,6 +491,7 @@ export function buildImportPreview(parsed: ParseResult, context: ImportContext):
       selected: rows.filter((r) => r.selected).length,
       duplicates: duplicateCount,
       needsReview: rows.filter((r) => r.needsReview).length,
+      blocked: rows.filter((r) => r.blocked).length,
       incomeCents: sumCents(rows.filter((r) => r.kind === 'income').map((r) => r.amountCents)),
       expenseCents: sumCents(rows.filter((r) => r.kind === 'expense').map((r) => r.amountCents)),
     },
@@ -274,49 +520,93 @@ export function materializePreview(
   context: ImportContext,
   importBatchId: ID,
 ): Transaction[] {
-  const accountId = context.target.type === 'account' ? context.target.accountId : undefined;
-  const cardId = context.target.type === 'card' ? context.target.cardId : undefined;
+  // A reconciliação de parcelas cresce durante a própria importação: uma fatura
+  // pode trazer duas parcelas da mesma compra, e a segunda precisa reconhecer a
+  // primeira.
+  const known: Transaction[] = [...context.existing];
+  const created: Transaction[] = [];
 
-  return preview.rows
-    .filter((row) => row.selected)
-    .map((row) => {
-      const draft: TransactionDraft = {
-        kind: row.kind,
-        date: row.date,
+  for (const row of preview.rows) {
+    if (!row.selected) continue;
+    const tx = buildTransaction(draftFromRow(row, context, importBatchId, known));
+    known.push(tx);
+    created.push(tx);
+  }
+
+  return created;
+}
+
+/** Monta o rascunho de um lançamento a partir de uma linha da prévia. */
+function draftFromRow(
+  row: PreviewRow,
+  context: ImportContext,
+  importBatchId: ID,
+  known: readonly Transaction[],
+): TransactionDraft {
+  const targetAccountId = context.target.type === 'account' ? context.target.accountId : undefined;
+  const targetCardId = context.target.type === 'card' ? context.target.cardId : undefined;
+
+  const draft: TransactionDraft = {
+    kind: row.kind,
+    date: row.date,
+    description: row.description,
+    amountCents: row.amountCents,
+    categorySource: row.categorySource,
+    needsReview: row.needsReview,
+    isFixed: row.isFixed,
+    importBatchId,
+    status: 'cleared',
+  };
+
+  if (row.categoryId) draft.categoryId = row.categoryId;
+  if (row.parsed.externalId) draft.externalId = row.parsed.externalId;
+
+  if (row.parsed.installmentNumber && row.parsed.installmentTotal) {
+    draft.installmentNumber = row.parsed.installmentNumber;
+    draft.installmentTotal = row.parsed.installmentTotal;
+    draft.installmentGroupId = resolveInstallmentGroup(
+      {
         description: row.description,
-        amountCents: row.amountCents,
-        categorySource: row.categorySource,
-        needsReview: row.needsReview,
-        isFixed: row.isFixed,
-        importBatchId,
-        status: 'cleared',
-      };
+        date: row.date,
+        installmentNumber: row.parsed.installmentNumber,
+        installmentTotal: row.parsed.installmentTotal,
+        cardId: targetCardId,
+      },
+      known,
+    );
+  }
 
-      if (row.categoryId) draft.categoryId = row.categoryId;
-      if (row.parsed.externalId) draft.externalId = row.parsed.externalId;
-      if (row.parsed.installmentNumber && row.parsed.installmentTotal) {
-        draft.installmentNumber = row.parsed.installmentNumber;
-        draft.installmentTotal = row.parsed.installmentTotal;
-        // Cada fatura traz apenas a parcela do mês; o grupo une as que forem
-        // importadas ao longo do tempo. A chave inclui o VALOR da parcela para
-        // que duas compras diferentes na mesma loja, com o mesmo número de
-        // parcelas, não sejam fundidas numa só.
-        draft.installmentGroupId = `imp_${normalize(row.description).replace(/\s+/g, '-')}_${row.parsed.installmentTotal}_${row.amountCents}`;
+  switch (row.kind) {
+    case 'card_payment':
+      draft.accountId = targetAccountId ?? context.paymentAccountId;
+      draft.cardId = targetCardId ?? row.paymentCardId ?? context.paymentCardId;
+      if (row.invoiceRef) draft.invoiceRef = row.invoiceRef;
+      draft.paymentMethod = 'debit';
+      break;
+
+    case 'transfer':
+      // A ponta da transferência depende do sinal da linha no arquivo: uma
+      // saída parte da conta importada; uma entrada chega nela.
+      if (row.parsed.amountCents < 0) {
+        draft.accountId = targetAccountId;
+        draft.toAccountId = row.counterAccountId;
+      } else {
+        draft.accountId = row.counterAccountId;
+        draft.toAccountId = targetAccountId;
       }
+      draft.paymentMethod = 'transfer';
+      break;
 
-      if (row.kind === 'card_payment') {
-        draft.accountId = accountId ?? context.paymentAccountId;
-        draft.cardId = cardId ?? context.paymentCardId;
-        if (row.invoiceRef) draft.invoiceRef = row.invoiceRef;
-        draft.paymentMethod = 'debit';
-      } else if (cardId) {
-        draft.cardId = cardId;
+    default:
+      if (targetCardId) {
+        draft.cardId = targetCardId;
         draft.paymentMethod = 'credit';
       } else {
-        draft.accountId = accountId;
+        draft.accountId = targetAccountId;
         draft.paymentMethod = row.kind === 'income' ? 'transfer' : 'debit';
       }
+      break;
+  }
 
-      return buildTransaction(draft);
-    });
+  return draft;
 }
