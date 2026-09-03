@@ -188,21 +188,28 @@ números.
 
 ## Publicar no GitHub Pages
 
-Já existe uma automação em `.github/workflows/deploy.yml`. A cada envio para a
-branch `main` ela roda os testes e, **só se todos passarem**, publica o site.
+Já existe uma automação em `.github/workflows/deploy.yml`. Ela roda os testes a
+cada envio e, **só se todos passarem**, publica o site — a partir da branch
+padrão do repositório, qualquer que seja o nome dela.
 
-Para ligar, uma vez:
+**Isso não está ligado por padrão.** São dois passos, uma única vez:
 
-1. No GitHub, vá em **Settings → Pages**.
-2. Em *Build and deployment → Source*, escolha **GitHub Actions**.
-3. Faça um push para `main`.
+1. **Tornar o repositório público** — em *Settings → General → Danger Zone →
+   Change repository visibility*. No plano gratuito o GitHub só publica Pages de
+   repositório público. (Alternativa: assinar o GitHub Pro, ~US$ 4/mês, e manter
+   privado.)
+2. **Ligar o Pages** — em *Settings → Pages → Build and deployment → Source*,
+   escolher **GitHub Actions**.
 
-O endereço fica `https://rafaelaschumacher.github.io/planilha/`.
+Depois disso, o próximo envio publica em
+`https://rafaelaschumacher.github.io/planilha/`.
 
-> **Sobre repositório privado:** o GitHub só publica Pages a partir de
-> repositório privado em contas Pro. Como esta aplicação é 100% client-side, o
-> repositório contém **apenas código** — nenhum dado financeiro seu. Manter o
-> código público não expõe nada das suas finanças.
+> **Tornar o código público expõe algo?** Não. A aplicação é 100% client-side: o
+> repositório contém **apenas código**, e seus dados financeiros vivem no banco
+> do seu navegador. É o mesmo risco de publicar uma calculadora.
+
+Enquanto o Pages não estiver ligado, dá para rodar localmente com `npm run dev`
+— tudo funciona igual.
 
 ---
 

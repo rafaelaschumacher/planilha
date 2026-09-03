@@ -2,7 +2,6 @@ name: Testes e publicação
 
 on:
   push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -38,8 +37,11 @@ jobs:
           # O GitHub Pages serve o site em /<nome-do-repositorio>/
           VITE_BASE_PATH: /${{ github.event.repository.name }}/
 
+      # Publica a partir da branch PADRÃO do repositório, seja ela qual for.
+      # Fixar "main" quebraria neste repositório, cuja branch padrão tem outro
+      # nome — e voltaria a quebrar se ela fosse renomeada.
       - name: Guardar o site
-        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        if: github.ref_name == github.event.repository.default_branch && github.event_name == 'push'
         uses: actions/upload-pages-artifact@v3
         with:
           path: dist
@@ -47,7 +49,7 @@ jobs:
   publicar:
     name: Publicar no GitHub Pages
     needs: verificar
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: github.ref_name == github.event.repository.default_branch && github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       pages: write
